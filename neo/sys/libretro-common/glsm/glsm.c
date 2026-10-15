@@ -2823,13 +2823,15 @@ static bool glsm_state_ctx_init(glsm_ctx_params_t *params)
 #endif
 #else
    hw_render.context_type       = RETRO_HW_CONTEXT_OPENGL;
+#endif
+   /* The caller's choice, where it made one: a GLES renderer can ask
+    * for a desktop context on a frontend that offers no other. */
    if (params->context_type != RETRO_HW_CONTEXT_NONE)
       hw_render.context_type    = params->context_type;
    if (params->major != 0)
       hw_render.version_major   = params->major;
    if (params->minor != 0)
       hw_render.version_minor   = params->minor;
-#endif
 
    hw_render.context_reset      = params->context_reset;
    hw_render.context_destroy    = params->context_destroy;

@@ -926,6 +926,9 @@ static idCVar vr_turnmode( "vr_turnmode", "0", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR
 static idCVar vr_turnangle( "vr_turnangle", "45", CVAR_SYSTEM | CVAR_ARCHIVE | CVAR_INTEGER, "VR snap turn in degrees; a smooth turn goes eight times it a second (a ninth of it a frame at 72 Hz)" );
 #endif
 
+/* the context type the frontend granted, of those initialize_opengl asks for */
+static enum retro_hw_context_type hw_context_type;
+
 static retro_hw_context_type get_hw_context_type(void)
 {
 #ifdef HAVE_OPENGLES
@@ -2800,6 +2803,25 @@ static void context_reset(void)
 
    glsm_ctl(GLSM_CTL_STATE_CONTEXT_RESET, NULL);
 
+#ifdef HAVE_OPENGLES3
+   if ( hw_context_type == RETRO_HW_CONTEXT_OPENGL ) {
+      /* the GLES 3 shaders on a desktop context need GL 4.3 or the
+       * extension; said once, as every video reinit resets */
+      static bool es3_checked;
+      const char *ver = (const char *)glGetString( GL_VERSION );
+      const char *ext = (const char *)glGetString( GL_EXTENSIONS );
+      int major = 0, minor = 0;
+      if ( ver )
+         sscanf( ver, "%d.%d", &major, &minor );
+      if ( !es3_checked && major * 10 + minor < 43
+            && !( ext && strstr( ext, "GL_ARB_ES3_compatibility" ) ) && log_cb )
+         log_cb( RETRO_LOG_ERROR, "[boom3] the GLES 3 renderer needs GL 4.3 or "
+               "GL_ARB_ES3_compatibility on a desktop context, and this is GL %s\n",
+               ver ? ver : "(unknown)" );
+      es3_checked = true;
+   }
+#endif
+
    if (libretro_shared_context)
       return;
 
@@ -3606,19 +3628,39 @@ static bool context_framebuffer_lock(void *data)
 static bool initialize_opengl(void)
 {
    glsm_ctx_params_t params = {0};
+   enum retro_hw_context_type types[2];
+   unsigned count = 0;
+   unsigned i;
 
-   params.context_type 	   = get_hw_context_type();
+   types[count++] = get_hw_context_type();
+#ifdef HAVE_OPENGLES3
+   /* A frontend built for desktop GL refuses a GLES context, as the
+    * Linux OpenXR hosts are. The GLES 3 renderer then runs on a
+    * compatibility profile, which takes its "#version 300 es" shaders
+    * through ARB_ES3_compatibility (checked at context_reset). */
+   types[count++] = RETRO_HW_CONTEXT_OPENGL;
+#endif
+
    params.context_reset    = context_reset;
    params.context_destroy  = context_destroy;
    params.environ_cb       = environ_cb;
    params.stencil          = true;
    params.framebuffer_lock = context_framebuffer_lock;
 
-   if (!glsm_ctl(GLSM_CTL_STATE_CONTEXT_INIT, &params))
+   for (i = 0; i < count; i++)
+   {
+      params.context_type = types[i];
+      if (glsm_ctl(GLSM_CTL_STATE_CONTEXT_INIT, &params))
+         break;
+   }
+   if (i == count)
    {
       log_cb(RETRO_LOG_ERROR, "Could not setup glsm.\n");
       return false;
    }
+   hw_context_type = types[i];
+   if (i > 0)
+      log_cb(RETRO_LOG_INFO, "[boom3] GLES context refused: the GLES 3 renderer runs on desktop GL\n");
 
 	if (environ_cb(RETRO_ENVIRONMENT_SET_HW_SHARED_CONTEXT, NULL))
       libretro_shared_context = true;
